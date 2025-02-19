@@ -10,7 +10,8 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
 from django.utils.timezone import now 
 from rest_framework.pagination import PageNumberPagination  
-from rest_framework.generics import ListCreateAPIView
+from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView
+from . permission import My_Permission
 
 
 class RegisterView(APIView):
@@ -106,3 +107,48 @@ class EventListCreateView(ListCreateAPIView):
         except Exception as e:
             return Response(
                 {"error": f"Could not fetch events: {str(e)}"},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+class EventRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
+    
+    permission_classes = [IsAuthenticated, My_Permission]
+    serializer_class = EventSerializer
+    queryset = Event.objects.all()
+    lookup_field = "id"
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            event = self.get_object()
+            serializer = EventSerializer(event)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Event.DoesNotExist:
+            return Response({"error": "Event not Exist"}, status=status.HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            return Response({"error": f"Something went wrong---> {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def update(self, request, *args, **kwargs):
+        try:
+            event = self.get_object()
+            serializer = EventSerializer(event, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        except Event.DoesNotExist:
+            return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            return Response({"error": f"Something went wrong: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    
+    def delete(self, request, *args, **kwargs):
+        try:
+            event = self.get_object()  
+            event.delete()
+            return Response({"message": "Event deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+        
+        except Exception as e:
+            return Response({"error": f"There is No Event Exists for that Host: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
