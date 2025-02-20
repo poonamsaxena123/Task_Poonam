@@ -1,7 +1,10 @@
-from rest_framework import serializers
-from .models import Event, EventParticipant, Invitation, Feedback
-from django.contrib.auth.models import User
 import re
+
+from django.contrib.auth.models import User
+from rest_framework import serializers
+
+from .models import Event, EventParticipant, Feedback, Invitation
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
