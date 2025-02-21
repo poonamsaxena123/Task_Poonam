@@ -2,16 +2,16 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
-from .models import Event
+from .models import Event, EventParticipant, Invitation
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
-from .serializers import EventSerializer ,RegisterSerializer
+from .serializers import EventSerializer ,RegisterSerializer, EventParticipantSerializer, InvitationSerializer
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
 from django.utils.timezone import now 
 from rest_framework.pagination import PageNumberPagination  
-from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView
-from . permission import My_Permission
+from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView, ListAPIView
+from . permission import My_Permission ,HostListPermission
 
 
 class RegisterView(APIView):
@@ -152,3 +152,140 @@ class EventRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
         
         except Exception as e:
             return Response({"error": f"There is No Event Exists for that Host: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+  
+class EventParticipantCreate(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, event_id):
+        user = request.user
+        print("-----user",user.username ,"event_id---",event_id)
+        
+        event = Event.objects.filter(id=event_id).first()
+        if not event:
+            return Response({"error": "No event found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if event.max_participants <= event.eventparticipant_set.count():
+            return Response({"error": "Event is full"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if EventParticipant.objects.filter(event=event, user=user).count() > 0:
+            return Response({"error": "User already registered for this event"}, status=status.HTTP_400_BAD_REQUEST)
+
+        event_participant = EventParticipant.objects.create(event=event, user=user)
+        return Response(
+            {"message": "Successfully registered for the event", "participant_id": event_participant.id},
+            status=status.HTTP_201_CREATED
+        )
+        
+        
+class EventParticipantsList(APIView):
+    permission_classes = [IsAuthenticated,HostListPermission]
+    def get(self, request, event_id):
+        try:
+            event = Event.objects.get(id=event_id)
+            print("----->event",event)
+        except Event.DoesNotExist:
+            return Response({"error": "No event found"}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+           
+            participants = EventParticipant.objects.filter(event=event)
+            
+            serializer = EventParticipantSerializer(participants, many=True)
+
+            return Response(
+                {"event_id": event_id, "participants": serializer.data},
+                status=status.HTTP_200_OK
+            )
+        
+        except Exception as e:
+            return Response({"error": f"Something went wrong: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+class SendInvitationView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, event_id):
+        user = request.user
+        print(user.username)
+        event = Event.objects.filter(id=event_id).first()
+        if not event:
+            return Response({"error": "No event found"}, status=status.HTTP_404_NOT_FOUND)
+    
+        if request.user != event.host:
+            return Response({"error": "Only the event host can send invitations."}, status=status.HTTP_403_FORBIDDEN)
+        
+        invitee_id = request.data.get("invitee")
+        if not invitee_id:
+            return Response({"error": "Invitee ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        invitation, created = Invitation.objects.get_or_create(
+            event=event, inviter=request.user, invitee_id=invitee_id,
+            defaults={"status": "PENDING"}
+        )
+        
+        if not created:
+            return Response({"error": "Invitation already sent."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(InvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
+
+
+
+class ListInvitationsView(APIView):
+    permission_classes = [IsAuthenticated]  
+
+    def get(self, request):
+        user = request.user
+        hosted_events = Event.objects.filter(host=user)
+        print(f"---->hosted_events:{hosted_events}")
+        if not hosted_events.exists():
+            return Response(
+                {"error": "Only event hosts can access this list."}
+            )
+        invitations = Invitation.objects.filter(event__in=hosted_events, status="PENDING")
+        print("----->invitations",invitations)
+        serializer = InvitationSerializer(invitations, many=True)
+        
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class RespondInvitationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, event_id):
+        user = request.user
+        print(f"Authenticated User: {user.id} - {user.username} -{event_id}")
+     
+        status_choice = request.data.get("status")
+        print("status_choice:", status_choice)
+
+        if status_choice not in ["ACCEPTED", "DECLINED"]:
+            return Response({"error": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        all_invites = Invitation.objects.all()
+        print("Existing Invitations:", list(all_invites.values()))
+        invitation = Invitation.objects.filter(event_id=event_id, invitee=user).first()
+        print("Fetched Invitation:", invitation) 
+        if not invitation:
+            return Response({"error": "Invitation not found or you do not have permission."}, status=status.HTTP_404_NOT_FOUND)
+
+      
+        invitation.status = status_choice
+        invitation.responded_at = now()
+        invitation.save()
+
+        return Response(InvitationSerializer(invitation).data, status=status.HTTP_200_OK)
+
+
+
+
+
+
+
+
+
+
+
+
+
+

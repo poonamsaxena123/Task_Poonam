@@ -25,7 +25,7 @@ class EventParticipantSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventParticipant
         fields = '__all__'
-
+        
 class InvitationSerializer(serializers.ModelSerializer):
     inviter = UserSerializer(read_only=True)
     invitee = UserSerializer(read_only=True)
@@ -40,8 +40,6 @@ class FeedbackSerializer(serializers.ModelSerializer):
     class Meta:
         model = Feedback
         fields = '__all__'
-        
-        
         
         
 class RegisterSerializer(serializers.Serializer):
