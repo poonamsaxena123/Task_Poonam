@@ -1,17 +1,18 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import NotFound
 from django.contrib.auth.models import User
-from .models import Event, EventParticipant, Invitation
+from .models import Event, EventParticipant, Invitation, Feedback
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
-from .serializers import EventSerializer ,RegisterSerializer, EventParticipantSerializer, InvitationSerializer
+from .serializers import EventSerializer, RegisterSerializer, EventParticipantSerializer, InvitationSerializer ,FeedbackSerializer
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
 from django.utils.timezone import now 
 from rest_framework.pagination import PageNumberPagination  
-from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView, ListAPIView
-from . permission import My_Permission ,HostListPermission
+from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView,RetrieveDestroyAPIView, UpdateAPIView
+from . permission import My_Permission, HostListPermission
 
 
 class RegisterView(APIView):
@@ -107,6 +108,7 @@ class EventListCreateView(ListCreateAPIView):
         except Exception as e:
             return Response(
                 {"error": f"Could not fetch events: {str(e)}"},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
             
 class EventRetrieveUpdateDestroyView(RetrieveUpdateDestroyAPIView):
     
@@ -230,7 +232,6 @@ class SendInvitationView(APIView):
         return Response(InvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
 
 
-
 class ListInvitationsView(APIView):
     permission_classes = [IsAuthenticated]  
 
@@ -243,49 +244,112 @@ class ListInvitationsView(APIView):
                 {"error": "Only event hosts can access this list."}
             )
         invitations = Invitation.objects.filter(event__in=hosted_events, status="PENDING")
-        print("----->invitations",invitations)
+        print(f"----->invitations: {invitations}")
         serializer = InvitationSerializer(invitations, many=True)
         
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
-class RespondInvitationView(APIView):
+    
+class RespondInvitationView(UpdateAPIView):
+    queryset = Invitation.objects.all()
+    serializer_class = InvitationSerializer
     permission_classes = [IsAuthenticated]
+    lookup_field = "event_id"
 
-    def put(self, request, event_id):
-        user = request.user
-        print(f"Authenticated User: {user.id} - {user.username} -{event_id}")
-     
-        status_choice = request.data.get("status")
-        print("status_choice:", status_choice)
+    def get_object(self):
+        invitation = Invitation.objects.filter(event_id=self.kwargs["event_id"], invitee=self.request.user).first()
 
-        if status_choice not in ["ACCEPTED", "DECLINED"]:
-            return Response({"error": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        all_invites = Invitation.objects.all()
-        print("Existing Invitations:", list(all_invites.values()))
-        invitation = Invitation.objects.filter(event_id=event_id, invitee=user).first()
-        print("Fetched Invitation:", invitation) 
         if not invitation:
-            return Response({"error": "Invitation not found or you do not have permission."}, status=status.HTTP_404_NOT_FOUND)
+            raise NotFound("Invitation not found or you do not have permission.")
 
-      
+        return invitation
+
+    def update(self, request, *args, **kwargs):
+        invitation = self.get_object()
+        status_choice = request.data.get("status")
+
+        if status_choice not in {"ACCEPTED", "DECLINED"}:
+            return Response({"error": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+
         invitation.status = status_choice
         invitation.responded_at = now()
-        invitation.save()
+        invitation.save(update_fields=["status", "responded_at"]) 
 
-        return Response(InvitationSerializer(invitation).data, status=status.HTTP_200_OK)
+        return Response(self.get_serializer(invitation).data, status=status.HTTP_200_OK)
 
+      
+class GetUserDestroyListView(RetrieveDestroyAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = EventSerializer
 
+    def get(self, request, *args, **kwargs):
+        print(f"User --------------->{request.user}")
+        try:
+            registered_events = Event.objects.filter(eventparticipant__user=request.user)
+            print(f"----registered_events :{registered_events}")
+            if not registered_events.exists():
+                return Response(
+                    {"message": "You are not registered for any events."},
+                    status=status.HTTP_200_OK
+                )
+            serializer = EventSerializer(registered_events, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"something went wrong -->{str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def delete(self, request, event_id):
+        try:
+            event = Event.objects.filter(id=event_id).first()
+            print(f"event ---->{event}")
+            if not event:
+                return Response({"error": "Event not found"}, status=status.HTTP_404_NOT_FOUND)
 
+            participant = EventParticipant.objects.filter(user=request.user, event=event).first()
+            print(f"participant ---->{participant}")
+            if not participant:
+                return Response({"error": "User is not registered for this event"}, status=status.HTTP_404_NOT_FOUND)
 
+            participant.delete()
+            return Response({"message": "You are unregistered from the event"}, status=status.HTTP_204_NO_CONTENT)
+        
+        except Exception as e:
+            return Response({"error": f"something wrong :--->{str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+                
+class FeedbackView(ListCreateAPIView):
+    serializer_class = FeedbackSerializer
+    permission_classes = [IsAuthenticated,HostListPermission]
+    def get_queryset(self):
+        event_id = self.kwargs.get("event_id")
+        return Feedback.objects.filter(event_id=event_id)
+    
 
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        event_id = self.kwargs["event_id"]
+        print(f"event_id -->{event_id}")
+        try:
+            event = Event.objects.get(id=event_id)
+            print(f"event---{event}")
+        except Event.DoesNotExist:
+            return Response(
+                {"error": "Event not found."}, status=status.HTTP_404_NOT_FOUND
+            )
 
+        if not EventParticipant.objects.filter(event=event, user=user).exists():
+            return Response(
+                {"error": "You can only leave feedback if you attended the event."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
+        if Feedback.objects.filter(event=event, user=user).exists():
+            return Response(
+                {"error": "You have already give feedback for this event."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(user=user, event=event)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-
-
-
-
-
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
