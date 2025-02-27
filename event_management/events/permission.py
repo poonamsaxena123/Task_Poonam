@@ -1,5 +1,7 @@
 from rest_framework.permissions import SAFE_METHODS, BasePermission
+
 from.models import Event
+
 
 class My_Permission(BasePermission):
     def has_object_permission(self, request, view, obj):
@@ -7,10 +9,11 @@ class My_Permission(BasePermission):
             return True
         return obj.host == request.user
 
-
-    
+ 
 class HostListPermission(BasePermission):
     def has_permission(self, request, view):
+        if request.method != "GET":
+            return True  
         event_id = view.kwargs.get("event_id")
         if not event_id:
             return False
@@ -19,3 +22,7 @@ class HostListPermission(BasePermission):
             return event.host == request.user
         except Event.DoesNotExist:
             return False
+
+
+
+
